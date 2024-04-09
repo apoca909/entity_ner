@@ -16,13 +16,15 @@ from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from transformers import BertConfig
+from transformers import BertConfig, ElectraConfig
 from transformers import  get_linear_schedule_with_warmup, AdamW
 from seqeval.metrics import classification_report
 import tokenization
 from data_loader import NerIterableDataset, collate_fn_tagging
 from modeling_sl import  PreTrained4SequenceLabeling
 from datetime import datetime
+
+
 
 today = datetime.now().strftime(f'%Y%m%d_%H%M%S')
 logger = logging.getLogger('__log__')
@@ -52,16 +54,16 @@ def set_seed(args):
 def save_checkpoint(args, model, output_dir):
     logger.info("Before Saving model checkpoint to %s", output_dir)
     model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-    #model_to_save.save_pretrained(output_dir)
-    path = os.path.join(output_dir, 'pytorch_model.bin')
-    state_dict = model.state_dict()
-    torch.save(state_dict, path)
+    model_to_save.save_pretrained(output_dir)
+    #path = os.path.join(output_dir, 'pytorch_model.bin')
+    #state_dict = model.state_dict()
+    #torch.save(state_dict, path)
     torch.save(args, os.path.join(output_dir, 'training_args.bin'))
     args_writer = open(os.path.join(output_dir, 'training_args.txt'), 'w', encoding='utf-8')
     print(f'{args}', file=args_writer)
     logger.info("Saving model checkpoint to %s", output_dir)
 
-def save_pred_result( save_filename, line_tokens, masks, preds, labels=None, golds=None, args=None):
+def save_pred_result( save_filename, line_tokens, masks, preds, golds=None, args=None):
     assert len(line_tokens) == len(masks)
     assert len(line_tokens) == len(preds)
     if golds is not None:
@@ -185,13 +187,12 @@ def train(args, model, taskdir):
             model.train()
             if args.task == 'tagging':
                 inputs = {  'input_ids': batch[0].to(args.device),
-                        'attention_mask':batch[2].to(args.device),
-                        'labels': batch[3].to(args.device),
-                        'do_eval': not args.do_train,
-                     }
+                            'attention_mask':batch[2].to(args.device),
+                            'labels': batch[3].to(args.device),
+                         }
 
             outputs = model(**inputs)
-            if len(outputs) == 2:
+            if len(outputs) == 3:
                 #n_gpu == 1
                 loss = outputs[0]
                 log_str = f'loss {loss:.5}, '
@@ -201,7 +202,7 @@ def train(args, model, taskdir):
                 #loss = torch.abs((loss - b)) + b
             else:
                 pass
-
+            
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
 
@@ -233,6 +234,7 @@ def train(args, model, taskdir):
             os.makedirs(output_dir, exist_ok=True)
             if args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
                 ner_f1, val_loss = evaluate(args, model, )
+                logger.info(f'epoch {epoch_idx} val_loss {val_loss:.5} ner_f1 {ner_f1:.5}')
                 writer.add_scalar('epoch/val_loss', val_loss, epoch_idx)
                 writer.add_scalar('epoch/ner_f1', ner_f1, epoch_idx)
                 if ner_f1 > best_fuse_f1:
@@ -250,15 +252,12 @@ def train(args, model, taskdir):
 
     return global_step, tr_loss / global_step
 
-
 def evaluate(args, model, ):
-    #eval single tagging or insertion
     eval_output_dir = args.output_dir
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
-    label_ids = utils.read_label_map(args.label_map_file)
-    punc_id_labels = {v:k for k, v in label_ids['punc'].items()}
-    cws_id_labels = {v:k for k, v in label_ids['cws'].items()}
+    label_ids = utils.read_json(args.label_file)
+    ids_label = { v:k for k,v in label_ids.items()}
     eval_dataset = NerIterableDataset(args, args.dev_file)
 
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
@@ -287,34 +286,15 @@ def evaluate(args, model, ):
             inputs = {  'input_ids': batch[0].to(args.device),
                         'attention_mask':batch[2].to(args.device),
                         'labels': batch[3].to(args.device),
-                        'do_eval': True,
                      }
-
-        if batches == 1 and args.do_train is False:
-            script_model = torch.jit.trace(model, batch[0])
-            #torch.jit.script(model)
-            logger.info(f'code {script_model.code}')
-
-            logger.info(f'save script model to {args.init_checkpoint}.script')
-            torch.jit.save(script_model, f"{args.init_checkpoint}.script")
-
-            _logits = script_model.forward(batch[0],)[2]
-            logger.info(f'test script out {_logits}')
-
-            script_model2 = torch.jit.load(f"{args.init_checkpoint}.script")
-            _logits2 = script_model2.forward(batch[0], )[2]
-            logger.info(f'test loaded script out {_logits2}')
-
 
         with torch.no_grad():
             outputs = model(**inputs)
 
-        if len(outputs) == 2:
-            loss = outputs[0]
-            tag_ids = outputs[1]
-
-            log_str = f'loss {loss:.5}, '
-            val_loss += loss
+        if len(outputs) == 3:
+            _loss = outputs[0]
+            tag_ids = outputs[2]
+            val_loss += _loss
             nb_eval_steps += 1
 
         if args.task == 'tagging':
@@ -335,26 +315,23 @@ def evaluate(args, model, ):
     tokens = [tokenizer.convert_ids_to_tokens(indices) for indices in tok_ids] 
     #sequence labeling 
 
-    gold_tags = [[punc_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1] for i, arr in enumerate(tag_golds)]
-    pred_tags = [[punc_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(tag_preds) ]
+    gold_tags = [[ids_label[v]  for j, v in enumerate(arr) if masks[i][j] == 1] for i, arr in enumerate(tag_golds)]
+    pred_tags = [[ids_label[v]  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(tag_preds) ]
 
-    
     tokens = [[v  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(tokens) ]
 
-    sl_report_punc = classification_report(gold_tags, pred_tags, digits=4, output_dict=True)
-    sl_report_punc_s = classification_report(gold_tags, pred_tags, digits=4, output_dict=False)
+    sl_report= classification_report(gold_tags, pred_tags, digits=4, output_dict=True)
+    sl_report_s = classification_report(gold_tags, pred_tags, digits=4, output_dict=False)
 
-    logger.info(f'\n{sl_report_punc_s}\n')
+    logger.info(f'\n{sl_report_s}\n')
 
     output_eval_file = os.path.join(eval_output_dir, os.path.basename(args.dev_file[0]) + '.pred')
     t2 = time.time()
     logger.info(f'finished compute_metrics, timecost {t2 - t0:.4} save result to {output_eval_file}')
 
-    save_pred_result(output_eval_file, tokens, masks, pred_tags, labels=None, golds=gold_tags, args=args)
+    save_pred_result(output_eval_file, tokens, masks, pred_tags, golds=gold_tags, args=args)
 
-    
-    
-    return sl_report_punc['weighted avg']['f1-score'], val_loss / nb_eval_steps
+    return sl_report['weighted avg']['f1-score'], val_loss / nb_eval_steps
 
 
 def main():
@@ -397,6 +374,7 @@ def main():
         label_map = utils.read_json(args.label_file)
         config.num_labels = len(label_map)
         config.usecrf = args.usecrf
+        logger.info(f'use crf  {args.usecrf} done.')
     if args.init_checkpoint is not None:
         #checkpoint = torch.load(args.init_checkpoint, map_location='cpu')
         #model.load_state_dict(checkpoint, strict=False)

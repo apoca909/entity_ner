@@ -1,16 +1,12 @@
-import os
 import random
-from typing import Counter
-
 import torch
-
 from torch.utils.data import IterableDataset
 import tokenization
 import utils
 import logging
 logger = logging.getLogger('__log__')
 
-def log_everyn(message, i, level='info', n=20000):
+def log_everyn(message, i, n=20000):
     if i % n == 0:
         logger.info(f"{i} {message}")
 
@@ -84,9 +80,8 @@ class NerIterableDataset(IterableDataset):
                                                                           args.input_format, 
                                                                           self.labels, 
                                                                           self.tokenizer, 
-                                                                          self.max_seq_length)):
-            if  i > nline > 0:
-                break
+                                                                          self.max_seq_length,
+                                                                          self.nline)):
             log_everyn(f'{i} examples processed {source_target}', i)
             yield source_target
         

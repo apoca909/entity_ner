@@ -1,27 +1,7 @@
-   # coding=utf-8
-# Copyright 2021 The Google Research Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Utility functions for Felix."""
 
 import json
-from typing import Counter
-
 import random
-import glob
 import logging
-import re
 
 logger = logging.getLogger('__log__')
 
@@ -51,21 +31,25 @@ def parse_raw_tagging_ner(line, labels, tokenizer, max_seq_length):
     tokens = []
     ner_tags = []
     
-    for part in line.lower().split():
+    for part in line.strip('\\n').lower().split():
         pos = part.find('/')
         if part.find('/') > 0:
             word = part[0:pos]
-            tag = part[pos+1:].upper()
+            tag = part[pos+1:].lower()
             word_size = len(word)
             std_tag = []
-            if word_size == 1:
-                std_tag = [f'S-{tag}']
-            elif word_size == 2:
-                std_tag = [f'B-{tag}', f'E-{tag}']
-            elif word_size > 2:
-                std_tag = [f'B-{tag}'] + [f'I-{tag}'] * (word_size - 2) + [f'E-{tag}']
+            
+            if tag == 'o':
+                std_tag = ['o'] * word_size
             else:
-                raise
+                if word_size == 1:
+                    std_tag = [f'S-{tag}']
+                elif word_size == 2:
+                    std_tag = [f'B-{tag}', f'E-{tag}']
+                elif word_size > 2:
+                    std_tag = [f'B-{tag}'] + [f'I-{tag}'] * (word_size - 2) + [f'E-{tag}']
+                else:
+                    raise
 
             tokens.extend(word)
             ner_tags.extend(std_tag)
@@ -91,7 +75,8 @@ def yield_sources_and_targets(
         input_format,
         labels,
         tokenizer,
-        max_seq_length):
+        max_seq_length, 
+        nline):
     
     data_spec = {'raw':(text_file_iterator, parse_raw_tagging_ner)}
 
@@ -99,7 +84,9 @@ def yield_sources_and_targets(
         raise ValueError("Unsupported input_format: {}".format(input_format))
     
     file_iterator_fn, parse_fn = data_spec[input_format]
-    for line in file_iterator_fn(input_file_pattern):
+    for idx, line in enumerate(file_iterator_fn(input_file_pattern)):
+        if 0 < nline < idx:
+            break
         parsed_t = parse_fn(line, labels, tokenizer, max_seq_length)
         yield parsed_t
 
@@ -126,9 +113,9 @@ def gold_pred(toks, golds, preds):
             raw_str += cur[0]
         elif prev[1:3] != cur[1:3]:
             if prev[1:3] == ('O', 'O'):
-                raw_str += '' + cur[0]      #' ' + cur[0]
+                raw_str += ' ' + cur[0]      #' ' + cur[0]
             elif prev[1:3] != ('O', 'O'):
-                    raw_str += '/' + prev[1] + '/' + prev[2] + '' + cur[0]  #'/' + prev[1] + '/' + prev[2] + ' ' + cur[0]
+                    raw_str += '/' + prev[1] + '/' + prev[2] + ' ' + cur[0]  #'/' + prev[1] + '/' + prev[2] + ' ' + cur[0]
     
     return raw_str.strip()
 
@@ -174,10 +161,11 @@ def keep_chinese_chars(text):
 
 def proc_json_tagging_to_raw_tagging(path):
     fw = open(path[0:-4] + '.raw.txt', 'w', encoding='utf-8')
+    labels = set()
     for line in open(path, 'r', encoding='utf-8'):
         js = json.loads(line)
         text = js['text']
-        pad = [{'entity_index': {'begin': -1, 'end': 0}, 'entity_type': 'O', 'entity': 'none'}]
+        pad = [{'entity_index': {'begin': -1, 'end': 0}, 'entity_type': 'o', 'entity': 'none'}]
         entity_list = pad + js['entity_list']
         text_new = []
         
@@ -185,7 +173,7 @@ def proc_json_tagging_to_raw_tagging(path):
         for i, entity in enumerate(entity_list):
             if i == 0:continue
             entity_text = entity['entity']
-            entity_type = entity['entity_type'].upper()
+            entity_type = entity['entity_type'].lower()
             entity_index_begin = entity['entity_index']['begin']
             entity_index_end = entity['entity_index']['end']
             last_end = entity_list[i-1]['entity_index']['end']
@@ -193,8 +181,9 @@ def proc_json_tagging_to_raw_tagging(path):
             pre_text = text[last_end:entity_index_begin].strip()
             assert entity_text == text[entity_index_begin:entity_index_end]
             entity_raw = text[entity_index_begin:entity_index_end] + '/' + entity_type
+            labels.add(entity_type)
             if len(pre_text) > 0:
-                text_new.append(pre_text)
+                text_new.append(pre_text+"/o")
             text_new.append(entity_raw)
 
         text_new.append(text[last_end:])
@@ -202,10 +191,48 @@ def proc_json_tagging_to_raw_tagging(path):
         print(' '.join(text_new).strip(), file=fw)
     fw.flush()
     fw.close()
+    tag_produce(" ".join(list(labels)))
 
-def tag_produce(tag = "COMPANY_NAME PERSON_NAME"):
-    tag_map = {"O":0}
-    for _tag in tag.split():
+def proc_cws(path):
+    fw = open(path[0:-4] + '.cws.txt', 'w', encoding='utf-8')
+    for line in open(path, 'r', encoding='utf-8'):
+        if line.strip() == "":continue
+        words = line.strip().split()
+        new_words = [w+'/wd' for w in words]
+        print(' '.join(new_words), file=fw)
+    fw.flush()
+    fw.close()
+def proc_msra(path):
+    fw = open(path[0:-4] + '.ner.txt', 'w', encoding='utf-8' )
+    labels = set()
+    tokens = [""]
+    tags   = [""]
+    for _line in open(path, 'r', encoding='utf-8'):
+        if _line.strip() == '':
+            new_lines = [z[0] + '/'+ z[1].lower() for z in zip(tokens, tags) if len(z[0]) > 0]
+            print(' '.join(new_lines), file=fw)
+            tokens = [""]
+            tags = [""]
+            continue
+        t = _line.strip().split('\t')
+        assert len(t) == 4, _line
+        tok = t[0]
+        tag = t[3]
+        if tag.find('-') > 0:
+            tag = tag.split('-')[1]
+            labels.add(tag)
+        if tag == tags[-1]:
+            tokens[-1] = tokens[-1] + tok
+            tags[-1] = tag
+        else:
+            tokens.append(tok)
+            tags.append(tag)
+    fw.flush()
+    fw.close()
+    tag_produce(" ".join(list(labels)))
+def tag_produce(tag = "COMPANY_NAME PERSON_NAME TIME ORG_NAME LOCATION PRODUCT_NAME"):
+    tag_map = {"o":0}
+    for _tag in tag.lower().split():
         tag_map["S-" + _tag] = len(tag_map)
         tag_map["B-" + _tag] = len(tag_map)
         tag_map["I-" + _tag] = len(tag_map)
@@ -213,7 +240,12 @@ def tag_produce(tag = "COMPANY_NAME PERSON_NAME"):
     print(json.dumps(tag_map))
 
 if __name__ == '__main__':
-    # proc_json_tagging_to_raw_tagging('data/train.txt')
+    pass
+    #proc_json_tagging_to_raw_tagging('data/offer/train.txt')
     # proc_json_tagging_to_raw_tagging('data/test.txt')
     # proc_json_tagging_to_raw_tagging('data/val.txt')
-    tag_produce()
+    
+    # proc_cws('./data/cws/train.txt')
+    # proc_cws('./data/cws/dev.txt')
+    # tag_produce("wd")
+    #proc_msra('/Users/on/Downloads/oo/pos.dev.msra.txt')
