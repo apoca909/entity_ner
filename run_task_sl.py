@@ -21,13 +21,13 @@ from transformers.models.electra import ElectraConfig
 from transformers import ElectraTokenizer, get_linear_schedule_with_warmup, AdamW
 from seqeval.metrics import classification_report
 import tokenization
-from data_loader import FelixIterableDataset, collate_fn_tagging
+from data_loader import NerIterableDataset, collate_fn_tagging
 from modeling_sl import  ElectraForTokenClassification
 from datetime import datetime
 
 
 MODEL_CLASSES = {
-    'tsfmrnn_tagging' : (ElectraConfig, ElectraForTokenClassification, ElectraTokenizer),
+    'tsfmrnn_tagging' : (ElectraConfig, PreTrained4SequenceLabeling),
     }
 today = datetime.now().strftime(f'%Y%m%d_%H%M%S')
 logger = logging.getLogger('__log__')

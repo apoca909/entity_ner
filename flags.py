@@ -7,17 +7,12 @@ def config_opts():
     parser.add_argument('--task', default='tagging', type=str, choices=['tagging',], 
                         help='task train tagging or insertion, if predict, both')
 
-    parser.add_argument('--model_type', default='tsfmrnn_tagging', choices=['electra_tagging', 'tsfmrnn_tagging',], type=str,)
-
     cchoices=['./raw_disf/electra_tagging.json', 
-               './raw_disf/bert_insertion.json',
-              './raw_disf/tsfmrnn_tagging.json']
+               './raw_disf/bert_insertion.json',]
     parser.add_argument('--nline', default=-1, type=int, help=
                         'train samples number.')
     parser.add_argument('--config_name', default=cchoices[2], type=str, help=
                         'Path to the config file for the tagging model.')
-    parser.add_argument('--weight', default=[0.5, 0.5], nargs='+', help=
-                        'ws and punc loss weight')
     parser.add_argument('--init_checkpoint',
                         default=None, 
                         type=str,
@@ -26,7 +21,6 @@ def config_opts():
 
     parser.add_argument('--do_train', action='store_true', help='do train')
     parser.add_argument('--do_eval', action='store_true',help='do train')
-    parser.add_argument('--do_predict', action='store_true', help='do predict pipline')
     ######
     parser.add_argument('--input_format', default='raw', choices=['raw'])
     #
@@ -47,17 +41,14 @@ def config_opts():
     parser.add_argument('--warmup_steps', default=0, type=int, help='Warmup steps for Adam weight decay optimizer.')
 
     parser.add_argument(
-        '--label_map_file', default='./raw_disf/label_map.json', type=str, help=
+        '--label_file', default='./raw_disf/label_map.json', type=str, help=
         'Path to the label map file. ')
     parser.add_argument('--vocab_file', default='./raw_disf/vocab.txt', type=str,
                         help='Path to the BERT vocabulary file.')
     parser.add_argument(
         '--predict_batch_size', default=32, type=int,
         help='Batch size for the prediction of insertion and tagging models.')
-    parser.add_argument(
-        '--do_lower_case', default=False, type=bool, help=
-        'Whether to lower case the input text. Should be True for uncased '
-        'models and False for cased models.')
+    
 
 
     parser.add_argument(
@@ -65,18 +56,6 @@ def config_opts():
         'Number of output variants to be considered. By default, the value is set '
         'to 0 and thus, no variants are considered. Warning! This feature only '
         'makes sense if num_output_variants >= 2.')
-
-    # Prediction flags.
-    parser.add_argument('--predict_input_file', default='', type=str,
-                        help='Path to the input file containing examples for which to'
-                        'compute predictions.')
-    parser.add_argument('--predict_output_file', default='', type=str, help=
-    'Path to the output file for predictions.')
-
-    # Training flags.
-    parser.add_argument(
-        '--use_weighted_labels', default=False, type=bool, help=
-        'Whether different labels were given different weights. ')
 
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
@@ -102,23 +81,6 @@ def config_opts():
 
     parser.add_argument('--clsmodel', default='./output/model_cnn/model_19.bin', type=str)
     parser.add_argument('--note', default='desc note', type=str)
-
-
-    ##-----------------------
-    parser.add_argument('--do_onnx_eval',
-                        action='store_true',
-                        help='do eval use onnx model, default false')
-    parser.add_argument('--model_onnx_path',
-                        default="onnx_model/punc_fp16.onnx",
-                        help='onnx model path')
-    parser.add_argument('--checkpoint', required=False, help='checkpoint model')
-    parser.add_argument('--fp16_model',
-                        action='store_true',
-                        help='whether to export fp16 model, default false')
-    parser.add_argument('--output_onnx_dir',
-                        default="onnx_model",
-                        help='output onnx model directory')
-
 
     args = parser.parse_args()
 

@@ -17,32 +17,32 @@ def log_everyn(message, i, level='info', n=20000):
 def collate_fn_tagging(data):
     def merge(datas):
         bs = len(datas)
-        lens = [len(d['input_ids']) for d in datas]
+        lens = [len(d['tokens']) for d in datas]
         maxlen =  max(lens)
         
         input_ids = torch.zeros(bs, maxlen).long()
         segment_ids = torch.zeros(bs, maxlen).long()
         input_mask  = torch.zeros(bs, maxlen).long()
-        
-        punc_edit_ids = torch.zeros(bs, maxlen).long() #edit tag
-        cws_edit_ids  = torch.zeros(bs, maxlen).long()
+        ner_tag_ids = torch.zeros(bs, maxlen).long() #edit tag
+
+        input_tokens = []
+        input_tags = []
         
         for i, data in enumerate(datas):
-            _input_ids = data['input_ids']
-            _segment_ids = data['segment_ids']
-            _punc_edit_ids = data['punc_edit_ids']
-            _cws_edit_ids  = data['cws_edit_ids']
-            _mask_ids = data['input_mask']
+            _input_ids = data['tokens_ids']
+            #_segment_ids = data['segment_ids']
+            _mask_ids = [1.0] *  len(_input_ids)
+            _ner_tag_ids = data['ner_tags_ids']
+            input_tokens.append(data['tokens'])
+            input_tags.append(data['ner_tags'])
            
             end = lens[i]
             input_ids[i, : end] = torch.tensor(_input_ids, dtype=torch.long)
             segment_ids[i, : end] = torch.tensor(_segment_ids, dtype=torch.long)
             input_mask[i, :end] = torch.tensor(_mask_ids, dtype=torch.long)
-            punc_edit_ids[i, : end] = torch.tensor(_punc_edit_ids, dtype=torch.long)
-            
-            cws_edit_ids[i, :end]   = torch.tensor(_cws_edit_ids, dtype=torch.long)
-
-        return input_ids, segment_ids, input_mask, punc_edit_ids, cws_edit_ids
+            ner_tag_ids[i, : end] = torch.tensor(_ner_tag_ids, dtype=torch.long)
+        
+        return input_ids, segment_ids, input_mask, ner_tag_ids, input_tokens, input_tags
     
     exa = merge(data)
     return exa
