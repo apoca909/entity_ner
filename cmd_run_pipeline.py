@@ -6,9 +6,9 @@ pip install torch transformers six seqeval tensorboardX
 def run_train_job():
     command = f'python run_task_sl.py --local_rank -1 ' \
     '--learning_rate 2e-4  --config_name ./raw_disf/bert_tagging.json ' \
-    '--per_gpu_train_batch_size 16 ' \
+    '--per_gpu_train_batch_size 8 ' \
     '--vocab_file ./raw_disf/vocab.txt '\
-    '--init_checkpoint hfl/chinese-bert-wwm-ext'
+    '--init_checkpoint hfl/chinese-bert-wwm-ext '\
     '--num_train_epochs 20 --do_train --do_eval '\
     '--train_file ./data/train.raw.txt '\
     '--dev_file ./data/dev.raw.txt ' \

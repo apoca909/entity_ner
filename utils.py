@@ -51,7 +51,7 @@ def parse_raw_tagging_ner(line, labels, tokenizer, max_seq_length):
     tokens = []
     ner_tags = []
     
-    for _, part in line.lower().split():
+    for part in line.lower().split():
         pos = part.find('/')
         if part.find('/') > 0:
             word = part[0:pos]
@@ -66,11 +66,13 @@ def parse_raw_tagging_ner(line, labels, tokenizer, max_seq_length):
                 std_tag = [f'B-{tag}'] + [f'I-{tag}'] * (word_size - 2) + [f'E-{tag}']
             else:
                 raise
+
+            tokens.extend(word)
+            ner_tags.extend(std_tag)
         else:
             std_tag = ['O'] * len(part)
-        
-        tokens.extend(word)
-        ner_tags.extend(std_tag)
+            tokens.extend(part)
+            ner_tags.extend(std_tag)
     #truncate
     tokens = tokens[0:max_seq_length-2]
     ner_tags = ner_tags[0:max_seq_length-2]

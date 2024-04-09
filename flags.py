@@ -78,8 +78,6 @@ def config_opts():
     parser.add_argument('--fp16_opt_level', type=str, default='O1',
                         help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3'].")
     parser.add_argument('--seed', default=42, type=int, )
-
-    parser.add_argument('--clsmodel', default='./output/model_cnn/model_19.bin', type=str)
     parser.add_argument('--note', default='desc note', type=str)
 
     args = parser.parse_args()

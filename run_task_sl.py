@@ -125,8 +125,7 @@ def train(args, model, taskdir):
               f'Note {args.note}\n'
     logger.info(message)
     writer = SummaryWriter(os.path.join(taskdir, 'summary'))
-    import pdb
-    pdb.set_traces()
+    
     train_dataset = NerIterableDataset(args, args.train_file)
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
@@ -188,7 +187,7 @@ def train(args, model, taskdir):
                 inputs = {  'input_ids': batch[0].to(args.device),
                         'attention_mask':batch[2].to(args.device),
                         'labels': batch[3].to(args.device),
-                        'train': args.do_train,
+                        'do_eval': not args.do_train,
                      }
 
             outputs = model(**inputs)
@@ -288,7 +287,7 @@ def evaluate(args, model, ):
             inputs = {  'input_ids': batch[0].to(args.device),
                         'attention_mask':batch[2].to(args.device),
                         'labels': batch[3].to(args.device),
-                        'train': False,
+                        'do_eval': True,
                      }
 
         if batches == 1 and args.do_train is False:
@@ -370,7 +369,7 @@ def main():
         os.makedirs(taskdir)
     
     init_logger(taskdir)
-
+    
     if args.server_ip and args.server_port:
         import ptvsd
         print("Waiting for debugger attach")

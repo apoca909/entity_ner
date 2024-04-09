@@ -54,7 +54,7 @@ class NerIterableDataset(IterableDataset):
         self.input_file = input_file
         self.end = self._get_file_info()
         self.nline = args.nline
-        self.labels = utils.read_json(args.label_map_file)
+        self.labels = utils.read_json(args.label_file)
         self.max_seq_length = args.max_seq_length
         self.tokenizer = tokenization.FullTokenizer(args.vocab_file)
 

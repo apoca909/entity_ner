@@ -23,18 +23,14 @@ class PreTrained4SequenceLabeling(BertPreTrainedModel, torch.nn.Module):
     def forward(self, input_ids, attention_mask=None, labels=None, do_eval=None):
         if attention_mask is None:
             attention_mask = torch.ne(input_ids, 0).float()
-        device = input_ids.device 
-        discriminator_hidden_states = self.electra(input_ids, attention_mask)
-        discriminator_sequence_output = discriminator_hidden_states[0]
-
-        # discriminator_sequence_output_d = self.dropout(discriminator_sequence_output)
-        # lstm_out, _ = self.lstm(discriminator_sequence_output_d, )
-        # lstm_out_d = self.dropout(lstm_out)
-
-        lstm_out_d = discriminator_sequence_output   #omit the lstm
-        logits = self.ner_classifier(lstm_out_d)
+        device = input_ids.device
+        discriminator_hidden_states = self.tsfm(input_ids, attention_mask)
+        discriminator_sequence_output_d = self.dropout(discriminator_hidden_states[0])
+        lstm_out, _ = self.lstm(discriminator_sequence_output_d, )
+        
+        logits = self.ner_classifier(lstm_out)
         loss = -self.crf.forward_loss(logits, labels, attention_mask.bool())
-
+        
         if not do_eval :
             loss = -self.crf.forward_loss(logits, labels, attention_mask.bool())
             output = (loss, logits)
