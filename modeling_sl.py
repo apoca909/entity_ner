@@ -19,9 +19,8 @@ class PreTrained4SequenceLabeling(BertPreTrainedModel, torch.nn.Module):
         #self.target_weight = config.weight
         self.usecrf = config.usecrf
         self.crf = CRFModule(num_tags=config.num_labels, batch_first=True)
-        #self.electra.from_pretrained('hfl/chinese-electra-180g-base-discriminator')
 
-    def forward(self, input_ids, attention_mask=None, punc_labels=None, cws_labels=None):
+    def forward(self, input_ids, attention_mask=None, labels=None, do_eval=None):
         if attention_mask is None:
             attention_mask = torch.ne(input_ids, 0).float()
         device = input_ids.device 
@@ -33,25 +32,17 @@ class PreTrained4SequenceLabeling(BertPreTrainedModel, torch.nn.Module):
         # lstm_out_d = self.dropout(lstm_out)
 
         lstm_out_d = discriminator_sequence_output   #omit the lstm
-        ner_logits = self.ner_classifier(lstm_out_d)
-        
-        cws_ids  = torch.argmax(ner_logits, dim=2)
+        logits = self.ner_classifier(lstm_out_d)
+        loss = -self.crf.forward_loss(logits, labels, attention_mask.bool())
 
-        if punc_labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            #Only keep active parts of the loss
-            if attention_mask is not None:
-                active_loss = attention_mask.view(-1) == 1
-                active_logits_punc = ner_logits.view(-1, self.config.punc_num_labels)[active_loss]
-                active_labels_punc = punc_labels.view(-1)[active_loss]
-                loss_punc = loss_fct(active_logits_punc, active_labels_punc)
-            else:
-                loss_punc = loss_fct(ner_logits.view(-1, self.config.punc_num_labels), punc_labels.view(-1))
-
+        if not do_eval :
+            loss = -self.crf.forward_loss(logits, labels, attention_mask.bool())
+            output = (loss, logits)
+            
         else:
-            loss_punc = torch.tensor(0, dtype=torch.float, device=device)
-
+            crf_logits = self.crf.forward(logits, attention_mask.bool())
+            output = (0, crf_logits)
+            
         
-        output = (loss, ner_logits, punc_idx, cws_logits, cws_ids)
-        return output  # output = (loss, punc_logits, punc_idx, cws_logits, cws_ids)
+        return output
 

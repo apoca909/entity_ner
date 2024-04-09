@@ -1,11 +1,10 @@
 import os
-python = '/opt/homebrew/Caskroom/miniconda/base/envs/wenet/bin/python'
 '''
 pip install torch transformers six seqeval tensorboardX ltp
 '''
 
-def run_train_tsfmrnn():
-    command = f'HF_ENDPOINT=https://hf-mirror.com CUDA_VISIBLE_DEVICES=-1 {python} run_task_disf.py --local_rank -1 ' \
+def run_train_job():
+    command = f' python run_task_disf.py --local_rank -1 ' \
     '--learning_rate 2e-4 --model_type tsfmrnn_tagging --config_name ./raw_disf/electra_tagging_small.json ' \
     '--per_gpu_train_batch_size 16 ' \
     '--vocab_file ./raw_disf/vocab.txt '\

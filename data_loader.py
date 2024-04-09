@@ -5,8 +5,7 @@ from typing import Counter
 import torch
 
 from torch.utils.data import IterableDataset
-import flags
-import preprocess
+import tokenization
 import utils
 import logging
 logger = logging.getLogger('__log__')
@@ -49,34 +48,16 @@ def collate_fn_tagging(data):
     return exa
 
 
-def collate_fn_cls(data):
-    def merge(datas):
-        bs = len(datas)
-        lens = [len(d['input_ids']) for d in datas] + [15]
-        maxlen =  max(lens)
-        #lmids_len = 20
-        input_ids_p = torch.zeros(bs, maxlen).long()
-        disf_cls_p = torch.zeros(bs).long()
 
-        for i, data in enumerate(datas):
-            input_ids = data['input_ids']
-            disf_cls = data['cls_tag']
-            end = lens[i]
-            input_ids_p[i, : end] = torch.tensor(input_ids, dtype=torch.long)
-            disf_cls_p[i] = disf_cls
-
-        kv = {'input_ids': input_ids_p,  'disf_cls':disf_cls_p}
-
-        return input_ids_p, disf_cls_p
-    exa = merge(data)
-    return exa
-
-class FelixIterableDataset(IterableDataset):
+class NerIterableDataset(IterableDataset):
     def __init__(self, args, input_file):
         self.args = args
         self.input_file = input_file
         self.end = self._get_file_info()
         self.nline = args.nline
+        self.labels = utils.read_json(args.label_map_file)
+        self.max_seq_length = args.max_seq_length
+        self.tokenizer = tokenization.FullTokenizer(args.vocab_file)
 
     def __iter__(self):
         for exa in self.build_data(self.args, self.input_file, self.nline):
@@ -99,55 +80,18 @@ class FelixIterableDataset(IterableDataset):
     def build_data(self, args, input_file, nline):
         random.seed(args.seed)
         logger.info(f'task preprocess {input_file}')
-        builder = preprocess.initialize_builder(args.label_map_file, args.max_seq_length, args.vocab_file, args.do_lower_case)
-        num_tagging_skip = 0
-        tokens = []
-        num_converted_tagging = 0
-        for i, (source, target_punc, target_cws) in enumerate(utils.yield_sources_and_targets(input_file, args.input_format, builder.get_labels())):
+        
+        for i, source_target in enumerate(utils.yield_sources_and_targets(input_file, 
+                                                                          args.input_format, 
+                                                                          self.labels, 
+                                                                          self.tokenizer, 
+                                                                          self.max_seq_length)):
             if nline > 0 and i > nline:
                 break
-            tagging_example = builder.build_example(source, target_punc, target_cws, input_format=args.input_format)
-            log_everyn(f'{i} examples processed', i)
-            if tagging_example is None :
-                logger.info(f'exp None skip {source}')
-                continue
-            
-            if tagging_example:
-                #tagging_examples.append(tagging_example.to_pt_example())
-                input_ids = tagging_example.features['input_ids']
-                log_everyn(f'{source}->{target_punc} {target_cws}; input_ids:{input_ids}', i)
-                num_converted_tagging += 1
-            else:
-                num_tagging_skip += 1
-
-            if args.task == 'tagging':
-                exa = tagging_example.to_pt_example()
-
-            yield exa
+            log_everyn(f'{i} examples processed {source_target}', i)
+            yield source_target
         
-        logger.info(f'Done. {num_converted_tagging} tagging  {num_tagging_skip} skipped')
-        
-        print(Counter(tokens))
 
 
 if __name__ == '__main__':
-    #python data_loader.py --dev_file ./raw_disf/rephrase.txt --input_format para
-    import logging
-    from logging import handlers
-    args = flags.config_opts()
-    logger.setLevel(logging.INFO)
-    sh = logging.StreamHandler()
-    taskdir = os.path.join(args.output_dir, args.task + '_eval' )
-    th = handlers.TimedRotatingFileHandler(filename=os.path.join(taskdir, '_log_.log'),
-                                           when='D',
-                                           backupCount=3,
-                                           encoding='utf-8')
-    format_str = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s: %(message)s')
-    sh.setFormatter(format_str)
-    th.setFormatter(format_str)
-    logger.addHandler(sh)
-    logger.addHandler(th)
-    logger.info(f'taskdir {taskdir}')
-
-    
-    [f for f in FelixIterableDataset(args, args.train_file)]
+    pass

@@ -36,12 +36,7 @@ def text_file_iterator(fnames):
     for fname in fnames:
         with open(fname, "r", encoding='utf-8') as f:
             for _, line in enumerate(f):
-                line = line.strip()
-                if line:
-                    if len(line) < 50 and len(lines) > 0 and len(lines[-1]) < 50:
-                        lines[-1] = lines[-1] + line
-                    else:
-                        lines.append(line)
+                lines.append(line.strip())
         if fname.find('train') >= 0:
             do_shuffle = True
     logger.info(f"all lines:{len(lines)}")
@@ -53,180 +48,64 @@ def text_file_iterator(fnames):
     for line in lines:
         yield line
 
-def parse_raw_tagging_punc(line, labels):
-    #处理人民日报语料，转成标点标签
+def parse_raw_tagging_ner(line, labels, tokenizer, max_seq_length):
+    #处理语料  line:我的名字叫 张三/name 。 
+    # labels: {'S-O':0, 'S-NAME':1, }
     tokens = []
-    punc_tags = []
-    cws_tags  = []
-    line = line.replace('!', '！').replace('?', "？").replace(',', '，')
-    words = ['|'] + line.split() + ['|']   #ltp_cws(line)
-    #line = ['[CLS]'] + list(line.strip().lower()) + ['[SEP]']
-    label_punc_ids = labels['punc']
-    #label_cws_ids  = label_ids['cws']
+    ner_tags = []
     
-    for _, word in enumerate(words):
-        _word = list(word)
-        _word_no_punc = []
-        for _, token in enumerate(_word):
-            if token in label_punc_ids.keys():
-                #当前位置为标点, 连续标点使用靠后的
-                if len(punc_tags) > 0:
-                    punc_tags[-1] = token
-                else:
-                    pass #首位标点忽略
+    for _, part in line.lower().split():
+        pos = part.find('/')
+        if part.find('/') > 0:
+            word = part[0:pos]
+            tag = part[pos+1:].upper()
+            word_size = len(word)
+            std_tag = []
+            if word_size == 1:
+                std_tag = [f'S-{tag}']
+            elif word_size == 2:
+                std_tag = [f'B-{tag}', f'E-{tag}']
+            elif word_size > 2:
+                std_tag = [f'B-{tag}'] + [f'I-{tag}'] * (word_size - 2) + [f'E-{tag}']
             else:
-                tokens.append(token)
-                _word_no_punc.append(token)
-                punc_tags.append("O") #default tag O
-        if len(_word_no_punc) == 0:
-            pass
-        elif len(_word_no_punc) == 1:
-            cws_tags.append('S-wd')
-        elif len(_word_no_punc) == 2:
-            cws_tags.append('B-wd')
-            cws_tags.append('E-wd')
+                raise
         else:
-            _cws_tag = ['B-wd'] + ['I-wd'] * (len(_word_no_punc) - 2) + ['E-wd']
-            cws_tags.extend(_cws_tag)
-            
-    tokens[0] = "[CLS]"
-    tokens[-1] = "[SEP]"
-    assert len(tokens) == len(punc_tags) == len(cws_tags), f'{len(tokens)} {len(punc_tags)} {len(cws_tags)}'
-    
-    
-    return [(' '.join(tokens), ' '.join(punc_tags), ' '.join(cws_tags) )]
+            std_tag = ['O'] * len(part)
+        
+        tokens.extend(word)
+        ner_tags.extend(std_tag)
+    #truncate
+    tokens = tokens[0:max_seq_length-2]
+    ner_tags = ner_tags[0:max_seq_length-2]
 
-def proc_quot(text):
-    text0 =  text.replace('(( ))', '').replace('_', ' ')
-    text1 = re.sub(u"\\<.*?>||/", '', text0) #去掉 <> /
-    tokens = []
-    tags = []
-    text2 = proc_bracket(text1) #中括号处理
-    text3 = proc_brace(' '.join(text2)) #大括号处理
-    
-    for item in text3:
-        if type(item) is str:
-            tokens.append(item)
-            tags.append('O')
-        elif type(item) is list:
-            item = [ i for i in flatten(item)]
-            if len(item) == 0:
-                continue
-            if item[0] in 'C':
-                tags.append('C')
-            elif item[0] in 'D':
-                tags.append('D')
-            elif item[0] in 'E':
-                tags.append('E')
-            elif item[0] in 'F':
-                tags.append('F')
-            elif item[0] in 'A':
-                tags.append('A')
-            else:
-                continue
+    tokens = ['[CLS]'] + tokens + ['[SEP]']
+    tokens_ids = tokenizer.convert_tokens_to_ids(tokens)
+    ner_tags = ['O'] + ner_tags + ['O']
+    ner_tags_ids = [labels[t] for t in ner_tags]
 
-            tokens.append(' '.join(item[1:]))
+    assert len(tokens) == len(ner_tags) == len(ner_tags_ids)
     
-    return '_'.join(tokens), '_'.join(tags)
-
-def proc_brace(text):
-    text = pad_pair(text, '{', '}')
-    
-    res = proc_nested(text, '[{]', '[}]')
-    return res
-
-def proc_bracket(text="[ [ [ [ that,1 + that,1 ] + that,2 ] + that,3 ] + [ that's,4 + that's4 ] ] the way it works there, {F um. } /"):
-    #proc []
-    text = pad_pair(text, '[', ']')
-    res = proc_nested(text, '[[]', '[]]')
-    tokens = []
-    #flatten the nested and pick the last item
-    for x in res:
-        if type(x) is list:
-            x = flatten(x)
-            last = get_last(x)
-            tokens.extend(last)
-        else:
-            tokens.append(x)
-    
-    return tokens
-
-def proc_nested(text, left='[[]', right='[]]', sep=' '):
-    pat = '({}|{}|{})'.format(left, right, sep)
-    tokens = re.split(pat, text)
-    stack = [[]]
-    for x in tokens:
-        if not x or re.match(sep, x): continue
-        if re.match(left, x):
-            stack[-1].append([])
-            stack.append(stack[-1][-1])
-        elif re.match(right, x):
-            stack.pop()
-        else:
-            stack[-1].append(x)
-    return stack.pop()
-
-def pad_pair(text, left='[', right=']'):
-    cnter = Counter(text)
-    diff = cnter.get(left, 0) - cnter.get(right, 0)
-    
-    #pad the bracket
-    if diff == 0:
-        pass
-    elif diff > 0:
-        text = text + right * diff
-    elif diff < 0:
-        text = left* (-diff) + text
-    return text
-
-def flatten(x):
-    for i in x:
-        if type(i) is list:
-            yield from flatten(i)
-        else:
-            yield i
-    
-def get_last(x):
-    vals = []
-    for i in x:
-        if i == '+':
-            vals = []
-        else:
-            vals.append(i)
-    return vals
+    return {"tokens":tokens, "tokens_ids":tokens_ids, "ner_tags":ner_tags, "ner_tags_ids":ner_tags_ids}
 
 def yield_sources_and_targets(
         input_file_pattern,
         input_format,
-        labels):
+        labels,
+        tokenizer,
+        max_seq_length):
     
-    data_spec = {'raw':(text_file_iterator, parse_raw_tagging_punc)}
+    data_spec = {'raw':(text_file_iterator, parse_raw_tagging_ner)}
 
     if input_format not in data_spec:
         raise ValueError("Unsupported input_format: {}".format(input_format))
 
     file_iterator_fn, parse_fn = data_spec[input_format]
-    for item in file_iterator_fn(input_file_pattern):
-        parsed_items = parse_fn(item, labels)
-        for parsed_item in parsed_items:
-            if parsed_item is not None :
-                yield parsed_item
+    for line in file_iterator_fn(input_file_pattern):
+        parsed_t = parse_fn(line, labels, tokenizer, max_seq_length)
+        yield parsed_t
 
 
-def get_filenames(patterns):
-    all_files = []
-    for pattern in patterns.split(","):
-        # points to a specific file.
-        files = glob.glob(pattern)
-        if not files:
-            raise RuntimeError("Could not find files matching: %s" % pattern)
-        all_files.extend(files)
-
-    return all_files
-
-
-def read_label_map(path):
-    ''' read the label ids'''
+def read_json(path):
     labels = {}
     with open(path, 'r', encoding='utf-8') as f:
         if path.endswith(".json"):
@@ -295,8 +174,5 @@ def keep_chinese_chars(text):
     return ''.join(zh_chars)
 
 if __name__ == '__main__':
-    text = 'As a matter of fact, [ one thing, + {A I have a young son /'
-    text = "so, that's, [child_talking] /"
-    
-    print(parse_raw_tagging_punc('此后，兰越峰便开始在走廊上班至今', {"N": 0, "，": 1, "。": 2, "？": 3, "！": 4}))
+    pass
      
