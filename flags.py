@@ -7,11 +7,11 @@ def config_opts():
     parser.add_argument('--task', default='tagging', type=str, choices=['tagging',], 
                         help='task train tagging or insertion, if predict, both')
 
-    cchoices=['./raw_disf/electra_tagging.json', 
-               './raw_disf/bert_insertion.json',]
+    parser.add_argument('--usecrf', default=True, type=bool, help=
+                        'use crf ')
     parser.add_argument('--nline', default=-1, type=int, help=
                         'train samples number.')
-    parser.add_argument('--config_name', default=cchoices[2], type=str, help=
+    parser.add_argument('--config_name', default=None, type=str, help=
                         'Path to the config file for the tagging model.')
     parser.add_argument('--init_checkpoint',
                         default=None, 

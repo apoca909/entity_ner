@@ -38,7 +38,6 @@ def collate_fn_tagging(data):
            
             end = lens[i]
             input_ids[i, : end] = torch.tensor(_input_ids, dtype=torch.long)
-            segment_ids[i, : end] = torch.tensor(_segment_ids, dtype=torch.long)
             input_mask[i, :end] = torch.tensor(_mask_ids, dtype=torch.long)
             ner_tag_ids[i, : end] = torch.tensor(_ner_tag_ids, dtype=torch.long)
         
@@ -86,7 +85,7 @@ class NerIterableDataset(IterableDataset):
                                                                           self.labels, 
                                                                           self.tokenizer, 
                                                                           self.max_seq_length)):
-            if nline > 0 and i > nline:
+            if  i > nline > 0:
                 break
             log_everyn(f'{i} examples processed {source_target}', i)
             yield source_target

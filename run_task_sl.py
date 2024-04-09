@@ -16,43 +16,31 @@ from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from transformers.models.bert import BertConfig
-from transformers.models.electra import ElectraConfig
-from transformers import ElectraTokenizer, get_linear_schedule_with_warmup, AdamW
+from transformers import BertConfig
+from transformers import  get_linear_schedule_with_warmup, AdamW
 from seqeval.metrics import classification_report
 import tokenization
 from data_loader import NerIterableDataset, collate_fn_tagging
-from modeling_sl import  ElectraForTokenClassification
+from modeling_sl import  PreTrained4SequenceLabeling
 from datetime import datetime
 
-
-MODEL_CLASSES = {
-    'tsfmrnn_tagging' : (ElectraConfig, PreTrained4SequenceLabeling),
-    }
 today = datetime.now().strftime(f'%Y%m%d_%H%M%S')
 logger = logging.getLogger('__log__')
 
-def get_point_score(golden_tags, pred_tags, masks, tokens):
 
-    ttag = 0
-    ftag = 0
-    for i, golden_tag in enumerate(golden_tags):
-        pred_tag = pred_tags[i]
-        mask_i = masks[i]
-        for j, v in enumerate(golden_tag):
-            if mask_i[j] == 0: continue
-            if golden_tag[j] == pred_tag[j]:
-                ttag += 1
-            else:
-                ftag += 1
-                # gold_points = [tokens[i][k] for k, p in enumerate(golden_tag) if mask_i[k] == 1 and p != 0]
-                # pred_points = [tokens[i][k] for k, p in enumerate(pred_tag) if mask_i[k] == 1 and p != 0]
-                # import pdb
-                # pdb.set_trace()
-
-    acc = ttag / (ttag + ftag)
-
-    return f'{acc:.4}'
+def init_logger(taskdir):
+    format_str = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s: %(message)s')
+    logger.setLevel(logging.INFO)
+    sh = logging.StreamHandler()
+    th = handlers.TimedRotatingFileHandler(filename=os.path.join(taskdir, '_log_.log'),
+                                           when='D',
+                                           backupCount=3,
+                                           encoding='utf-8')
+    sh.setFormatter(format_str)
+    th.setFormatter(format_str)
+    logger.addHandler(sh)
+    logger.addHandler(th)
+    logger.info(f'taskdir {taskdir}')
 
 def set_seed(args):
     random.seed(args.seed)
@@ -137,8 +125,9 @@ def train(args, model, taskdir):
               f'Note {args.note}\n'
     logger.info(message)
     writer = SummaryWriter(os.path.join(taskdir, 'summary'))
-
-    train_dataset = FelixIterableDataset(args, args.train_file)
+    import pdb
+    pdb.set_traces()
+    train_dataset = NerIterableDataset(args, args.train_file)
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
     train_dataloader = DataLoader(dataset=train_dataset, num_workers=0, batch_size=args.train_batch_size, 
@@ -195,19 +184,17 @@ def train(args, model, taskdir):
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
             model.train()
-            batch = tuple(t.to(args.device) for t in batch)
             if args.task == 'tagging':
-                inputs = {'input_ids': batch[0],
-                          'attention_mask':batch[2],
-                          'punc_labels': batch[3],
-                          'cws_labels': batch[4],}
+                inputs = {  'input_ids': batch[0].to(args.device),
+                        'attention_mask':batch[2].to(args.device),
+                        'labels': batch[3].to(args.device),
+                        'train': args.do_train,
+                     }
 
             outputs = model(**inputs)
-            if len(outputs) == 5:
+            if len(outputs) == 2:
                 #n_gpu == 1
                 loss = outputs[0]
-                punc_logits = outputs[1]
-                punc_logits_ids = outputs[2]
                 log_str = f'loss {loss:.5}, '
 
             if args.n_gpu > 1:
@@ -246,17 +233,16 @@ def train(args, model, taskdir):
             output_dir = os.path.join(taskdir, 'checkpoint-epoch{}-final'.format(epoch_idx))
             os.makedirs(output_dir, exist_ok=True)
             if args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
-                punc_f1, val_loss, cws_f1 = evaluate(args, model, )
+                ner_f1, val_loss = evaluate(args, model, )
                 writer.add_scalar('epoch/val_loss', val_loss, epoch_idx)
-                writer.add_scalar('epoch/punc_f1', punc_f1, epoch_idx)
-                writer.add_scalar('epoch/cws_f1', cws_f1, epoch_idx)
-                if punc_f1 > best_fuse_f1:
-                    logger.info(f'f1 update epoch {epoch_idx} fuse_f1: {best_fuse_f1} -> {punc_f1}')
-                    best_fuse_f1 = punc_f1
+                writer.add_scalar('epoch/ner_f1', ner_f1, epoch_idx)
+                if ner_f1 > best_fuse_f1:
+                    logger.info(f'f1 update epoch {epoch_idx} fuse_f1: {best_fuse_f1} -> {ner_f1}')
+                    best_fuse_f1 = ner_f1
                     best_ep = epoch_idx
                     save_checkpoint(args, model, output_dir)
                 else:
-                    logger.info(f'f1 not updated {epoch_idx} fuse_f1: {punc_f1}; best: {best_fuse_f1} epoch: {best_ep}')
+                    logger.info(f'f1 not updated {epoch_idx} fuse_f1: {ner_f1}; best: {best_fuse_f1} epoch: {best_ep}')
             else:
                 save_checkpoint(args, model, output_dir)
 
@@ -274,7 +260,7 @@ def evaluate(args, model, ):
     label_ids = utils.read_label_map(args.label_map_file)
     punc_id_labels = {v:k for k, v in label_ids['punc'].items()}
     cws_id_labels = {v:k for k, v in label_ids['cws'].items()}
-    eval_dataset = FelixIterableDataset(args, args.dev_file)
+    eval_dataset = NerIterableDataset(args, args.dev_file)
 
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
     # Note that DistributedSampler samples randomly
@@ -286,11 +272,9 @@ def evaluate(args, model, ):
     logger.info("  Batch size = %d", args.eval_batch_size)
     nb_eval_steps = 0
     tok_ids = []
-    punc_label_golds = []
-    punc_label_preds = []
+    tag_golds = []
+    tag_preds = []
 
-    cws_label_golds = []
-    cws_label_preds = []
     masks = []
     t0 = time.time()
     model.eval()
@@ -298,12 +282,13 @@ def evaluate(args, model, ):
     val_loss = 0
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
         batches += 1
-        batch = tuple(t.to(args.device) for t in batch)
+        #batch:input_ids, segment_ids, input_mask, ner_tag_ids, input_tokens, input_tags
+        
         if args.task == 'tagging':
-            inputs = {  'input_ids': batch[0],
-                        'attention_mask':batch[2],
-                        'punc_labels': batch[3],
-                        'cws_labels': batch[4],
+            inputs = {  'input_ids': batch[0].to(args.device),
+                        'attention_mask':batch[2].to(args.device),
+                        'labels': batch[3].to(args.device),
+                        'train': False,
                      }
 
         if batches == 1 and args.do_train is False:
@@ -325,31 +310,25 @@ def evaluate(args, model, ):
         with torch.no_grad():
             outputs = model(**inputs)
 
-        if len(outputs) == 5:
+        if len(outputs) == 2:
             loss = outputs[0]
-            tag_logits = outputs[1]
-            punc_logits_ids = outputs[2]
-            cws_logits_ids = outputs[4]
+            tag_ids = outputs[1]
 
             log_str = f'loss {loss:.5}, '
             val_loss += loss
             nb_eval_steps += 1
 
         if args.task == 'tagging':
-            ba_punc_pred = punc_logits_ids.detach().cpu().numpy().tolist()
+            ba_tag_pred = tag_ids.detach().cpu().numpy().tolist()
             ba_tok_ids = batch[0].detach().cpu().numpy().tolist()
             ba_mask = batch[2].float().detach().cpu().numpy().tolist()
-            ba_punc_gold = batch[3].detach().cpu().numpy().tolist()
-            ba_cws_pred  = cws_logits_ids.detach().cpu().numpy().tolist()
-            ba_cws_gold  = batch[4].detach().cpu().numpy().tolist()
+            ba_tag_gold = batch[3].detach().cpu().numpy().tolist()
+            
 
             tok_ids.extend(ba_tok_ids)
             masks.extend(ba_mask)
-            punc_label_golds.extend(ba_punc_gold)
-            punc_label_preds.extend(ba_punc_pred)
-
-            cws_label_golds.extend(ba_cws_gold)
-            cws_label_preds.extend(ba_cws_pred)
+            tag_golds.extend(ba_tag_gold)
+            tag_preds.extend(ba_tag_pred)
 
     t1 = time.time()
     bss = batches / (t1 - t0)
@@ -357,27 +336,14 @@ def evaluate(args, model, ):
     tokens = [tokenizer.convert_ids_to_tokens(indices) for indices in tok_ids] 
     #sequence labeling 
 
-    gold_punc_tags = [[punc_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1] for i, arr in enumerate(punc_label_golds)]
-    pred_punc_tags = [[punc_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(punc_label_preds) ]
+    gold_tags = [[punc_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1] for i, arr in enumerate(tag_golds)]
+    pred_tags = [[punc_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(tag_preds) ]
 
-    for i, v1 in enumerate(gold_punc_tags):
-        for j, v2 in enumerate(v1):
-            if gold_punc_tags[i][j] == 'O':
-                pass
-            else:
-                gold_punc_tags[i][j] = 'S-' + gold_punc_tags[i][j]
-
-    for i, v1 in enumerate(pred_punc_tags):
-        for j, v2 in enumerate(v1):
-            if pred_punc_tags[i][j] == 'O':
-                pass
-            else:
-                pred_punc_tags[i][j] = 'S-' + pred_punc_tags[i][j]
-
+    
     tokens = [[v  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(tokens) ]
 
-    sl_report_punc = classification_report(gold_punc_tags, pred_punc_tags, digits=4, output_dict=True)
-    sl_report_punc_s = classification_report(gold_punc_tags, pred_punc_tags, digits=4, output_dict=False)
+    sl_report_punc = classification_report(gold_tags, pred_tags, digits=4, output_dict=True)
+    sl_report_punc_s = classification_report(gold_tags, pred_tags, digits=4, output_dict=False)
 
     logger.info(f'\n{sl_report_punc_s}\n')
 
@@ -385,27 +351,11 @@ def evaluate(args, model, ):
     t2 = time.time()
     logger.info(f'finished compute_metrics, timecost {t2 - t0:.4} save result to {output_eval_file}')
 
-    #去掉S-标记
-    for i, v1 in enumerate(gold_punc_tags):
-        for j, v2 in enumerate(v1):
-            if gold_punc_tags[i][j][0] == 'S':
-                gold_punc_tags[i][j] =  gold_punc_tags[i][j][2:]
+    save_pred_result(output_eval_file, tokens, masks, pred_tags, labels=None, golds=gold_tags, args=args)
 
-    for i, v1 in enumerate(pred_punc_tags):
-        for j, v2 in enumerate(v1):
-            if pred_punc_tags[i][j][0] == 'S':
-                pred_punc_tags[i][j] = pred_punc_tags[i][j][2:]
-    save_pred_result(output_eval_file, tokens, masks, pred_punc_tags, labels=None, golds=gold_punc_tags, args=args)
-
-    gold_cws_tags = [[cws_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1] for i, arr in enumerate(cws_label_golds)]
-    pred_cws_tags = [[cws_id_labels[v]  for j, v in enumerate(arr) if masks[i][j] == 1 ] for i, arr in enumerate(cws_label_preds) ]
-
-    sl_report_cws = classification_report(gold_cws_tags, pred_cws_tags, digits=4, output_dict=True)
-    sl_report_cws_s = classification_report(gold_cws_tags, pred_cws_tags, digits=4, output_dict=False)
-    logger.info(f'\ncws:\n')
-    logger.info(f'\n{sl_report_cws_s}\n')
     
-    return sl_report_punc['weighted avg']['f1-score'], val_loss / nb_eval_steps, sl_report_cws['weighted avg']['f1-score']
+    
+    return sl_report_punc['weighted avg']['f1-score'], val_loss / nb_eval_steps
 
 
 def main():
@@ -418,20 +368,8 @@ def main():
     taskdir = os.path.join(args.output_dir, args.task + '_' + today)
     if not os.path.exists(taskdir):
         os.makedirs(taskdir)
-    format_str = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s: %(message)s')
-    logger.setLevel(logging.INFO)
-    sh = logging.StreamHandler()
-    th = handlers.TimedRotatingFileHandler(filename=os.path.join(taskdir, '_log_.log'),
-                                           when='D',
-                                           backupCount=3,
-                                           encoding='utf-8')
-    sh.setFormatter(format_str)
-    th.setFormatter(format_str)
-    logger.addHandler(sh)
-    logger.addHandler(th)
-    logger.info(f'taskdir {taskdir}')
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite:
-        raise ValueError(f"Output directory ({args.output_dir}) already exists and is not empty. Use --overwrite or rename.")
+    
+    init_logger(taskdir)
 
     if args.server_ip and args.server_port:
         import ptvsd
@@ -454,28 +392,20 @@ def main():
 
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
-    label_map = utils.read_label_map(args.label_map_file)
-    tokenizer = tokenization.FullTokenizer(args.vocab_file)
-
-    args.model_type = args.model_type.lower()
-    assert (args.task =='tagging' and args.model_type.find('tagging') >-1 ), 'task and model mismatch'
-
-    config_class, model_class, _ = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name)
-    if args.task == 'tagging':
-        config.punc_num_labels = len(label_map['punc'])
-        config.cws_num_labels = len(label_map['cws'])
-        config.vocab_size = len(tokenizer.vocab)
-        config.weight =  [float(args.weight[0]), float(args.weight[1])] 
     
+    config = BertConfig.from_pretrained(args.config_name)
+    if args.task == 'tagging':
+        label_map = utils.read_json(args.label_file)
+        config.num_labels = len(label_map)
+        config.usecrf = args.usecrf
     if args.init_checkpoint is not None:
         #checkpoint = torch.load(args.init_checkpoint, map_location='cpu')
         #model.load_state_dict(checkpoint, strict=False)
-        model = model_class.from_pretrained(args.init_checkpoint, config=config)
+        model = PreTrained4SequenceLabeling.from_pretrained(args.init_checkpoint, config=config)
         logger.info(f'ckpt loaded {args.init_checkpoint} done.')
     else:
         logger.info('init ckpt is None, cold start.')
-        model = model_class(config=config)
+        model = PreTrained4SequenceLabeling(config=config)
         if args.do_train is False and args.do_eval is True:
             logger.warn('init ckpt is None, please check!')
             raise

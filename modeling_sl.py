@@ -15,7 +15,7 @@ class PreTrained4SequenceLabeling(BertPreTrainedModel, torch.nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.init_weights()
         self.lstm = nn.LSTM(config.hidden_size, config.hidden_rnn_size, num_layers=config.num_rnn_layers, bidirectional=True, batch_first=True)
-        self.ner_classifier = nn.Linear(config.hidden_rnn_size * 2, config.ner_num_labels)
+        self.ner_classifier = nn.Linear(config.hidden_rnn_size * 2, config.num_labels)
         #self.target_weight = config.weight
         self.usecrf = config.usecrf
         self.crf = CRFModule(num_tags=config.num_labels, batch_first=True)

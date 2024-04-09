@@ -22,10 +22,7 @@ import random
 import glob
 import logging
 import re
-try:
-    from cws import ltp_cws
-except Exception as e:
-    print(e)
+
 logger = logging.getLogger('__log__')
 
 
@@ -81,7 +78,7 @@ def parse_raw_tagging_ner(line, labels, tokenizer, max_seq_length):
     tokens = ['[CLS]'] + tokens + ['[SEP]']
     tokens_ids = tokenizer.convert_tokens_to_ids(tokens)
     ner_tags = ['O'] + ner_tags + ['O']
-    ner_tags_ids = [labels[t] for t in ner_tags]
+    ner_tags_ids = [labels.get(t, 0) for t in ner_tags]  #未并入标签字典的标记 转为0处理
 
     assert len(tokens) == len(ner_tags) == len(ner_tags_ids)
     
@@ -98,7 +95,7 @@ def yield_sources_and_targets(
 
     if input_format not in data_spec:
         raise ValueError("Unsupported input_format: {}".format(input_format))
-
+    
     file_iterator_fn, parse_fn = data_spec[input_format]
     for line in file_iterator_fn(input_file_pattern):
         parsed_t = parse_fn(line, labels, tokenizer, max_seq_length)
@@ -173,6 +170,48 @@ def keep_chinese_chars(text):
             zh_chars.append(c)
     return ''.join(zh_chars)
 
+def proc_json_tagging_to_raw_tagging(path):
+    fw = open(path[0:-4] + '.raw.txt', 'w', encoding='utf-8')
+    for line in open(path, 'r', encoding='utf-8'):
+        js = json.loads(line)
+        text = js['text']
+        pad = [{'entity_index': {'begin': -1, 'end': 0}, 'entity_type': 'O', 'entity': 'none'}]
+        entity_list = pad + js['entity_list']
+        text_new = []
+        
+        last_end = 0
+        for i, entity in enumerate(entity_list):
+            if i == 0:continue
+            entity_text = entity['entity']
+            entity_type = entity['entity_type'].upper()
+            entity_index_begin = entity['entity_index']['begin']
+            entity_index_end = entity['entity_index']['end']
+            last_end = entity_list[i-1]['entity_index']['end']
+            assert entity_index_end > last_end
+            pre_text = text[last_end:entity_index_begin].strip()
+            assert entity_text == text[entity_index_begin:entity_index_end]
+            entity_raw = text[entity_index_begin:entity_index_end] + '/' + entity_type
+            if len(pre_text) > 0:
+                text_new.append(pre_text)
+            text_new.append(entity_raw)
+
+        text_new.append(text[last_end:])
+        
+        print(' '.join(text_new).strip(), file=fw)
+    fw.flush()
+    fw.close()
+
+def tag_produce(tag = "COMPANY_NAME PERSON_NAME"):
+    tag_map = {"O":0}
+    for _tag in tag.split():
+        tag_map["S-" + _tag] = len(tag_map)
+        tag_map["B-" + _tag] = len(tag_map)
+        tag_map["I-" + _tag] = len(tag_map)
+        tag_map["E-" + _tag] = len(tag_map)
+    print(json.dumps(tag_map))
+
 if __name__ == '__main__':
-    pass
-     
+    # proc_json_tagging_to_raw_tagging('data/train.txt')
+    # proc_json_tagging_to_raw_tagging('data/test.txt')
+    # proc_json_tagging_to_raw_tagging('data/val.txt')
+    tag_produce()
