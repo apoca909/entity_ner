@@ -248,4 +248,4 @@ if __name__ == '__main__':
     # proc_cws('./data/cws/train.txt')
     # proc_cws('./data/cws/dev.txt')
     # tag_produce("wd")
-    #proc_msra('/Users/on/Downloads/oo/pos.dev.msra.txt')
+    proc_msra('/Users/on/Downloads/oo/pos.train.msra.txt')

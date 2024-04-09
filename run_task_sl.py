@@ -303,7 +303,6 @@ def evaluate(args, model, ):
             ba_mask = batch[2].float().detach().cpu().numpy().tolist()
             ba_tag_gold = batch[3].detach().cpu().numpy().tolist()
             
-
             tok_ids.extend(ba_tok_ids)
             masks.extend(ba_mask)
             tag_golds.extend(ba_tag_gold)
